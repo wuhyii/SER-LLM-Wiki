@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 如何從聲音辨識情緒？從 CNN-LSTM 到 Speech LLM</title>
+  <style>
+    :root {
+      --bg-primary: #0b0f19;
+      --bg-card: #151c2c;
+      --bg-card-hover: #1c263c;
+      --border-color: #26354f;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent-cyan: #38bdf8;
+      --accent-blue: #6366f1;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --font-stack: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang TC", "Noto Sans TC", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      font-family: var(--font-stack);
+      line-height: 1.6;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      user-select: none;
+    }
+
+    /* Top Progress Bar */
+    #progress-container {
+      width: 100%;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.08);
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 100;
+    }
+
+    #progress-bar {
+      height: 100%;
+      width: 8.33%;
+      background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+      transition: width 0.3s ease;
+    }
+
+    /* Header Nav */
+    header {
+      padding: 14px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(11, 15, 25, 0.85);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border-color);
+      z-index: 90;
+    }
+
+    .header-title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .header-badge {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent-cyan);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 700;
+    }
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .slide-counter {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      min-width: 80px;
+      text-align: center;
+    }
+
+    button.btn-nav {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    button.btn-nav:hover:not(:disabled) {
+      background: var(--bg-card-hover);
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+    }
+
+    button.btn-nav:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* Main Slide Container */
+    #slide-viewport {
+      flex: 1;
+      position: relative;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 30px 20px;
+    }
+
+    .slide {
+      display: none;
+      width: 100%;
+      max-width: 1080px;
+      min-height: 520px;
+      animation: fadeIn 0.35s ease forwards;
+    }
+
+    .slide.active {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(12px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Slide Typography & Layout */
+    .slide-header {
+      margin-bottom: 24px;
+    }
+
+    .slide-tag {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--accent-cyan);
+      font-weight: 700;
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    .slide-title {
+      font-size: 2.1rem;
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1.25;
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .slide-subtitle {
+      font-size: 1.05rem;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    /* Grid Layouts */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 20px;
+      margin-top: 10px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-top: 10px;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-top: 10px;
+    }
+
+    /* Card Component */
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 22px;
+      position: relative;
+      transition: all 0.2s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(56, 189, 248, 0.4);
+      background: var(--bg-card-hover);
+    }
+
+    .card-highlight {
+      border-left: 4px solid var(--accent-cyan);
+    }
+
+    .card-highlight-amber {
+      border-left: 4px solid var(--accent-amber);
+    }
+
+    .card-highlight-emerald {
+      border-left: 4px solid var(--accent-emerald);
+    }
+
+    .card-highlight-rose {
+      border-left: 4px solid var(--accent-rose);
+    }
+
+    .card h3 {
+      font-size: 1.15rem;
+      font-weight: 600;
+      margin-bottom: 10px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card p, .card li {
+      font-size: 0.92rem;
+      color: #cbd5e1;
+      margin-bottom: 8px;
+    }
+
+    .card ul {
+      padding-left: 20px;
+    }
+
+    /* Math Box */
+    .math-box {
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px dashed #334155;
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 12px 0;
+      font-family: "Fira Code", monospace, Consolas, sans-serif;
+      font-size: 0.9rem;
+      color: #38bdf8;
+      overflow-x: auto;
+    }
+
+    .math-desc {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Source Citation Badge */
+    .citation-bar {
+      margin-top: 22px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .cite-badge {
+      background: rgba(99, 102, 241, 0.15);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-weight: 500;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .cite-badge:hover {
+      background: rgba(99, 102, 241, 0.25);
+      border-color: #818cf8;
+    }
+
+    /* Visual Diagram Flow */
+    .flow-steps {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 16px 0;
+      flex-wrap: wrap;
+    }
+
+    .flow-step {
+      background: #1e293b;
+      border: 1px solid #334155;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #f1f5f9;
+      text-align: center;
+      flex: 1;
+      min-width: 140px;
+    }
+
+    .flow-step small {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: normal;
+      color: var(--accent-cyan);
+      margin-top: 2px;
+    }
+
+    .flow-arrow {
+      color: var(--text-muted);
+      font-weight: 700;
+      font-size: 1.1rem;
+    }
+
+    /* Stat Box */
+    .stat-box {
+      text-align: center;
+      padding: 12px;
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 8px;
+      margin-top: 10px;
+    }
+
+    .stat-num {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: var(--accent-cyan);
+      line-height: 1.1;
+    }
+
+    .stat-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Compare Table */
+    table.slide-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      margin-top: 12px;
+    }
+
+    table.slide-table th {
+      background: #1e293b;
+      padding: 9px 12px;
+      text-align: left;
+      color: #f8fafc;
+      font-weight: 600;
+      border: 1px solid var(--border-color);
+    }
+
+    table.slide-table td {
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      color: #cbd5e1;
+    }
+
+    table.slide-table tr:nth-child(even) {
+      background: rgba(30, 41, 59, 0.4);
+    }
+
+    .badge-win {
+      color: var(--accent-emerald);
+      font-weight: 700;
+    }
+
+    .badge-warn {
+      color: var(--accent-amber);
+      font-weight: 700;
+    }
+
+    .badge-lose {
+      color: var(--accent-rose);
+      font-weight: 700;
+    }
+
+    /* Bottom Keyboard Hint Bar */
+    footer {
+      padding: 10px 24px;
+      background: var(--bg-primary);
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+    }
+
+    .kbd-hint {
+      display: inline-block;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: monospace;
+      color: #e2e8f0;
+      margin: 0 3px;
+    }
+
+    /* Slide Dots Drawer */
+    .dots-container {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #334155;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .dot.active {
+      background: var(--accent-cyan);
+      transform: scale(1.3);
+    }
+
+    /* Responsive Mobile Media Queries & Layout Protection */
+    @media (max-width: 768px) {
+      header {
+        padding: 10px 14px;
+      }
+      .header-title {
+        font-size: 0.82rem;
+      }
+      .header-badge {
+        display: none;
+      }
+      .slide-title {
+        font-size: 1.45rem;
+      }
+      .slide-subtitle {
+        font-size: 0.88rem;
+      }
+      /* Collapse multi-column grids to single column on mobile screens */
+      .grid-2, .grid-3, .grid-4 {
+        grid-template-columns: 1fr;
+        gap: 12px;
+      }
+      .flow-steps {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .flow-arrow {
+        text-align: center;
+        transform: rotate(90deg);
+        margin: 2px 0;
+      }
+      #slide-viewport {
+        padding: 16px 12px;
+        align-items: flex-start;
+      }
+      .card {
+        padding: 16px;
+      }
+      .citation-bar {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      table.slide-table {
+        display: block;
+        overflow-x: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Progress Bar -->
+  <div id="progress-container">
+    <div id="progress-bar"></div>
+  </div>
+
+  <!-- Top Navigation Header -->
+  <header>
+    <div class="header-title">
+      <span class="header-badge">SER Teaching Slides</span>
+      <span>AI 如何從聲音辨識情緒？從 CNN-LSTM 到 Speech LLM</span>
+    </div>
+    <div class="header-controls">
+      <button class="btn-nav" id="btn-prev" onclick="prevSlide()" disabled>← 上一頁</button>
+      <div class="slide-counter" id="slide-indicator">1 / 12</div>
+      <button class="btn-nav" id="btn-next" onclick="nextSlide()">下一頁 →</button>
+      <button class="btn-nav" id="btn-fullscreen" onclick="toggleFullScreen()">⛶ 全螢幕</button>
+    </div>
+  </header>
+
+  <!-- Slide Viewport -->
+  <main id="slide-viewport">
+
+    <!-- ==================== SLIDE 1 ==================== -->
+    <section class="slide active" data-index="1">
+      <div class="slide-header">
+        <span class="slide-tag">Module 00 · 課程導言與學習地圖</span>
+        <h1 class="slide-title">AI 如何從聲音辨識情緒？</h1>
+        <p class="slide-subtitle">從手製聲學特徵、CNN-LSTM 混合模型到語音大型語言模型（Speech LLM）的深度學習演進之旅</p>
+      </div>
+
+      <div class="grid-4" style="margin-top: 15px;">
+        <div class="card card-highlight">
+          <h3>1. 聲學特徵工程</h3>
+          <p>聲音如何數位化？從連續時域波形轉換為二維<b>梅爾頻譜圖 (Log-Mel)</b> 與 <b>MFCC</b>，讓神經網路「看見」聲音。</p>
+          <div class="stat-box">
+            <div class="stat-num">STFT</div>
+            <div class="stat-label">時頻轉換數學基礎</div>
+          </div>
+        </div>
+
+        <div class="card card-highlight">
+          <h3>2. 深度混合時頻架構</h3>
+          <p>空間卷積（<b>2D CNN</b>）搭配時間序列（<b>BiLSTM</b>）與<b>注意力機制 (Attention)</b>，捕捉語音情緒爆發點。</p>
+          <div class="stat-box">
+            <div class="stat-num">98.1%</div>
+            <div class="stat-label">RAVDESS 測試準確率</div>
+          </div>
+        </div>
+
+        <div class="card card-highlight-emerald">
+          <h3>3. 自監督基石 (SSL)</h3>
+          <p><b>HuBERT</b> 透過離線 K-means 與 Transformer 遮罩預測學習語音本質，成為下游情感運算的最強特徵教師。</p>
+          <div class="stat-box">
+            <div class="stat-num">PNMI 0.686</div>
+            <div class="stat-label">迭代聲學單元挖掘純度</div>
+          </div>
+        </div>
+
+        <div class="card card-highlight-amber">
+          <h3>4. 輕量蒸餾與 LLM</h3>
+          <p><b>LiSER</b> 僅需 105K 參數即可端側部署；<b>Qwen2-Audio (8.2B)</b> 則帶領語音情緒邁向開放式對話共情時代。</p>
+          <div class="stat-box">
+            <div class="stat-num">105K vs 8.2B</div>
+            <div class="stat-label">極致輕量 vs 通用模型</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="citation-bar">
+        <span>適合對象：具備基本 Python 與機器學習概念，想快速掌握語音情緒辨識的核心工程師與大專院校學生</span>
+        <span class="cite-badge">SER LLM Wiki 知識庫編譯</span>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 2 ==================== -->
+    <section class="slide" data-index="2">
+      <div class="slide-header">
+        <span class="slide-tag">Module 01 · 任務定義與核心概念</span>
+        <h2 class="slide-title">聲音裡的「言外之意」：什麼是 SER？</h2>
+        <p class="slide-subtitle">語音情緒辨識（Speech Emotion Recognition, SER）與語音辨識（ASR）的本質差異</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>🗣️ 語音辨識 ASR：關心「說了什麼」</h3>
+          <p><b>語音轉文字 (Speech-to-Text)</b>：核心任務是將發音符號映射到離散單詞或文字符號。</p>
+          <ul>
+            <li>主要消除說話者的個體差異與環境噪音。</li>
+            <li>文字相同時無法區分反諷、憤怒或悲傷語氣。</li>
+            <li>依賴發音清晰度與字典對齊。</li>
+          </ul>
+          <div class="math-box">輸入音訊 ➔ 輸出文字：「我今天真的太高興了。」</div>
+        </div>
+
+        <div class="card card-highlight-rose">
+          <h3>🎭 語音情緒辨識 SER：關心「怎麼說的」</h3>
+          <p><b>副語言語音線索 (Paralinguistics)</b>：非文字所能承載的聲音特徵與情感表達方式。</p>
+          <ul>
+            <li><b>基頻與音高 (Pitch / $F_0$)</b>：興奮或憤怒時音高往往劇烈跳躍。</li>
+            <li><b>聲音能量 (Energy / Volume)</b>：能量起伏反映情緒喚醒度 (Arousal)。</li>
+            <li><b>語速與停頓 (Speech Rate & Pauses)</b>：悲傷常伴隨沉重停頓與拖長音。</li>
+            <li><b>共振峰與音色 (Formants & Timbre)</b>：聲道收縮與聲帶張力變化。</li>
+          </ul>
+          <div class="math-box">輸入音訊 ➔ 輸出情緒狀態：[憤怒: 0.89, 諷刺: 0.78, 悲傷: 0.05]</div>
+        </div>
+      </div>
+
+      <div class="card card-highlight-emerald" style="margin-top: 15px;">
+        <h3>🛡️ 醫療與人機互動應用中的隱私優勢</h3>
+        <p>在遠距心理健康評估與智慧客服中，SER 可<b>僅分析聲學物理特徵而不儲存或解析發話者的文字語意</b>，杜絕語意內容外洩風險，具備強大的隱私防護特性。</p>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Bhanbhro et al. (2025) Section 1; Singh et al. (2023) Section 1</span>
+        <a href="https://doi.org/10.3390/signals6020022" class="cite-badge" target="_blank">Signals 2025</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 3 ==================== -->
+    <section class="slide" data-index="3">
+      <div class="slide-header">
+        <span class="slide-tag">Module 02 · 聲學特徵工程</span>
+        <h2 class="slide-title">聲音如何變成「影像」？梅爾頻譜圖的誕生</h2>
+        <p class="slide-subtitle">從一維非平穩時域連續波形，轉化為深度神經網絡可卷積的二維時頻特徵矩陣</p>
+      </div>
+
+      <div class="flow-steps">
+        <div class="flow-step">
+          1. 原始波形
+          <small>16 kHz 數位取樣 $x[n]$</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          2. 加窗分幀 (STFT)
+          <small>窗長 25ms / 步長 10ms</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          3. 傅立葉功率譜
+          <small>$P[m, k] = |X[m, k]|^2$</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          4. 梅爾三角濾波器組
+          <small>模擬人耳非線性臨界頻帶</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          5. 對數梅爾頻譜圖
+          <small>Log-Mel $(B, 1, T, F)$</small>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>👂 人類聽覺感知與梅爾刻度 (Mel Scale)</h3>
+          <p>人耳對低頻聲音變化敏感，高頻區分辨能力大幅下降。梅爾轉換公式將物理頻率 $f$ (Hz) 映射為心理感知刻度 $m$ (Mel)：</p>
+          <div class="math-box">
+            m = 2595 \cdot \log_{10}\left(1 + \frac{f}{700}\right)
+          </div>
+          <p class="math-desc">💡 例如：100 Hz 到 200 Hz 的音高變化在人耳聽來非常鮮明，但 7000 Hz 到 7100 Hz 幾乎難以分辨。</p>
+        </div>
+
+        <div class="card">
+          <h3>📐 深度學習張量維度流 (Tensor Shapes)</h3>
+          <p>音訊轉換為 Log-Mel 頻譜圖後，即變成具備時序空間語意的「單通道音訊影像」：</p>
+          <div class="math-box">
+            \mathbf{X} \in \mathbb{R}^{B \times C \times T \times F}
+          </div>
+          <ul>
+            <li><b>$B$</b>：Batch Size（批次樣本數）</li>
+            <li><b>$C$</b>：Channel 數（單通道頻譜為 1）</li>
+            <li><b>$T$</b>：時間幀長度（如 3 秒音訊以 10ms 步長約產生 300 幀）</li>
+            <li><b>$F$</b>：頻率維度（常見為 64、80 或 128 Mel Bins）</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Wiki 核心概念篇；Bhanbhro et al. (2025) Pre-Processing Section 3.2</span>
+        <a href="https://doi.org/10.3390/signals6020022" class="cite-badge" target="_blank">Signals 2025</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 4 ==================== -->
+    <section class="slide" data-index="4">
+      <div class="slide-header">
+        <span class="slide-tag">Module 03 · 特徵選擇與雜訊增強</span>
+        <h2 class="slide-title">特徵大對決：MFCC vs 節奏特徵消融實證</h2>
+        <p class="slide-subtitle">特徵越多越好？破解節奏特徵迷思，以及為何雜訊增強是 SER 的關鍵護城河</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>📊 聲學特徵消融實驗數據 (Singh et al., 2023)</h3>
+          <p>在基準 1D-CNN 上比對 10 種不同特徵組合的測試表現：</p>
+          <table class="slide-table">
+            <thead>
+              <tr><th>特徵輸入組合</th><th>測試準確率</th><th>評價</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>節奏特徵 (Tempogram + F-temp)</td><td>13.98%</td><td class="badge-lose">完全無效</td></tr>
+              <tr><td>僅使用 Mel-spectrogram</td><td>77.74%</td><td class="badge-warn">基礎可用</td></tr>
+              <tr><td><b>僅使用 MFCC (梅爾倒頻譜係數)</b></td><td><b>85.00%</b></td><td class="badge-win">單特徵最強 🏆</td></tr>
+              <tr><td>MFCC + Mel + 頻譜質心等多重特徵</td><td>86.00%</td><td>僅微幅增長 1%</td></tr>
+            </tbody>
+          </table>
+          <p class="math-desc" style="margin-top: 8px;">💡 <b>結論</b>：節奏特徵無法獨立表徵情緒；單一 MFCC 即可達到 85% 準確率，盲目堆疊特徵只會徒增模型複雜度與過擬合風險。</p>
+        </div>
+
+        <div class="card card-highlight-emerald">
+          <h3>🔊 雜訊增強：防止實驗室過擬合的解法</h3>
+          <p>實驗室語音（如演員錄音）極端乾淨，模型常過擬合於無雜音環境。Bhanbhro et al. (2025) 引入動態加性高斯白雜訊 (AWGN)：</p>
+          <div class="math-box">
+            K = \sqrt{\frac{P_{\text{signal}}}{P_{\text{noise}}}} \cdot 10^{-\frac{\text{target\_snr}}{10}}, \quad \text{SNR} \in [15, 30] \text{ dB}
+          </div>
+          <div class="stat-box" style="margin-top: 10px;">
+            <div class="stat-num" style="color: var(--accent-emerald);">80.0% ➔ 96.5%</div>
+            <div class="stat-label">CNN-LSTM 引入雜訊增強前後之測試準確率飛躍</div>
+          </div>
+          <p class="math-desc">讓模型在訓練期間習慣多樣化的訊雜比，能顯著增強特徵辨識的泛化魯棒性。</p>
+        </div>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Singh et al. (2023) Table 1; Bhanbhro et al. (2025) Section 3.3 & Table 2</span>
+        <a href="https://doi.org/10.3390/ijerph20065140" class="cite-badge" target="_blank">IJERPH 2023</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 5 ==================== -->
+    <section class="slide" data-index="5">
+      <div class="slide-header">
+        <span class="slide-tag">Module 04 · 評測協議批判思維</span>
+        <h2 class="slide-title">評測協議大陷阱：同一個資料集，為什麼準確率差這麼多？</h2>
+        <p class="slide-subtitle">看懂論文報告的數字真相：說話者洩漏 (Speaker Leakage) 與性別偏誤</p>
+      </div>
+
+      <div class="card card-highlight-amber" style="margin-bottom: 16px;">
+        <h3>⚠️ 致命對比：RAVDESS 資料集上的兩種完全不同表現</h3>
+        <p>初學者在閱讀文獻時常困惑：為什麼有的論文報告 <b>98.1%</b>，而有的知名大作卻只有 <b>59.5%</b>？</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3>📌 時間分割 / 隨機分割 (Random Split)</h3>
+          <p><b>[Bhanbhro et al. (2025)] 報告 98.1% Accuracy</b></p>
+          <ul>
+            <li><b>切分方式</b>：80% 早段錄音訓練，10% 晚段錄音測試。</li>
+            <li><b>現象</b>：同一位演員（說話者）的聲音同時出現在訓練集與測試集！</li>
+            <li><b>後果</b>：模型記住了演員個人的聲線音色特徵（<b>Speaker Leakage</b>），導致帳面準確率極高。</li>
+            <li><b>本質</b>：驗證的是「說話者相依 (Speaker-Dependent)」的情緒辨識能力。</li>
+          </ul>
+        </div>
+
+        <div class="card card-highlight-rose">
+          <h3>🛡️ 留一說話者 / 跨說話者 5-Fold (LOSO)</h3>
+          <p><b>[Pendyala et al. (2025) LiSER] 報告 59.5% UAR</b></p>
+          <ul>
+            <li><b>切分方式</b>：測試集的說話者完全未在訓練集中出現過！</li>
+            <li><b>現象</b>：杜絕音色作弊，模型必須完全仰賴純粹的情緒副語言特徵。</li>
+            <li><b>指標</b>：採用非加權平均召回率（<b>UAR / Balanced Accuracy</b>），避免類別不平衡干擾。</li>
+            <li><b>本質</b>：真實反映對「未曾聽過的陌生人類語音」的情緒泛化極限。</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 15px;">
+        <p style="font-size: 0.9rem; color: #cbd5e1;">
+          <b>👩👨 資料集性別聲學偏誤 [Singh et al., 2023]</b>：在跨庫融合實驗中，全女性的 <b>TESS 準確率達 99.81%</b>，但全男性的 <b>SAVEE 僅 57.50%</b>。這歸因於女性普遍具備較高音高與較短聲道，使情緒聲學諧波在頻譜上更為鮮明易分。若資料集性別失衡，將嚴重誤導模型評測！
+        </p>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Bhanbhro et al. (2025) Table 2; Pendyala et al. (2025) Table 2; Singh et al. (2023) Table 3 & 4</span>
+        <a href="file:///c:/Users/User/Desktop/SER-LLM-Wiki/concepts/evaluation-metrics.md" class="cite-badge">Wiki 評測協議專頁</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 6 ==================== -->
+    <section class="slide" data-index="6">
+      <div class="slide-header">
+        <span class="slide-tag">Module 05 · 深度學習里程碑架構 (1)</span>
+        <h2 class="slide-title">視覺神經網路如何「聽音」？2D CNN 的時頻卷積</h2>
+        <p class="slide-subtitle">將頻譜圖視為單通道圖片：局部感知野、通道擴展與特徵尺度折衷</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>🖼️ 頻譜圖上的空間語意與局部感受野</h3>
+          <p>卷積核在梅爾頻譜圖的二維網格上滑動運算：</p>
+          <ul>
+            <li><b>時間維度 (Horizontal)</b>：音素演變、語速節奏、能量暴增點。</li>
+            <li><b>頻率維度 (Vertical)</b>：基頻 $F_0$ 起伏、共振峰 (Formants) 諧波間距。</li>
+            <li><b>卷積核操作 (2D Convolution)</b>：
+              <div class="math-box">
+                \mathbf{Y}[t, f] = \sigma\left(\sum_{c} \sum_{i} \sum_{j} \mathbf{W}[c, i, j] \cdot \mathbf{X}[c, t+i, f+j] + b\right)
+              </div>
+            </li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <h3>🏗️ 經典 6 區塊時間分佈 2D CNN (Bhanbhro 2025)</h3>
+          <p>隨網絡深度逐層擴展特徵抽象度與濾波器通道數：</p>
+          <ul>
+            <li><b>Block 1–2</b>：$5 \times 5$ 大卷積核（stride 1, pad 2），濾波器 8 ➔ 16，捕捉宏觀頻帶分佈。</li>
+            <li><b>Block 3–6</b>：$3 \times 3$ 精細卷積核，濾波器 32 ➔ 64 ➔ 128 ➔ 256，捕捉局部諧波微調。</li>
+            <li><b>活化與正規化</b>：全架構採用 <b>ELU</b> 取代 ReLU，各區塊搭配 BatchNorm 與 Dropout (0.2)。</li>
+          </ul>
+          <div class="stat-box">
+            <div class="stat-num">8 ➔ 256</div>
+            <div class="stat-label">時間分佈 2D 卷積特徵圖通道擴展流</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card card-highlight-rose" style="margin-top: 15px;">
+        <h3>⚠️ 純 2D CNN 的先天的時序局限性</h3>
+        <p>CNN 預設輸入在各方向具有平移對稱性，但語音是<b>具有嚴格因果順序與長程相依性的時間序列</b>。純 CNN 的局部感受野難以跨越數百毫秒感知完整句意的情緒起伏，驅使研究者導入循環神經網絡（RNN/LSTM）。</p>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Bhanbhro et al. (2025) Section 3.3.1; Wiki architectures/cnn-for-ser.md</span>
+        <a href="https://doi.org/10.3390/signals6020022" class="cite-badge" target="_blank">Signals 2025</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 7 ==================== -->
+    <section class="slide" data-index="7">
+      <div class="slide-header">
+        <span class="slide-tag">Module 06 · 深度學習里程碑架構 (2)</span>
+        <h2 class="slide-title">捕捉整句情感起伏：CRNN (CNN + BiLSTM) 架構</h2>
+        <p class="slide-subtitle">空間特徵萃取（CNN）與時間序列建模（雙向 LSTM）的無縫聯姻</p>
+      </div>
+
+      <div class="flow-steps">
+        <div class="flow-step">
+          輸入頻譜圖
+          <small>$\mathbf{X} \in \mathbb{R}^{B \times 1 \times T \times F}$</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          2D CNN 區塊
+          <small>抽取空間時頻高階特徵</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          維度重塑 / 投影
+          <small>$\mathbf{H}_{\text{seq}} \in \mathbb{R}^{B \times T' \times D}$</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          雙向 BiLSTM
+          <small>正向 $\vec{h}_t$ + 反向 $\overleftarrow{h}_t$</small>
+        </div>
+        <div class="flow-arrow">➔</div>
+        <div class="flow-step">
+          情緒分類器
+          <small>Dense + Softmax</small>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>雙向長短期記憶網絡 (Bidirectional LSTM)</h3>
+          <p>單向 LSTM 只能看見過去的語境，但人類情緒往往需要全句聽完才能準確判斷。BiLSTM 同時進行正向與反向時序狀態傳遞：</p>
+          <div class="math-box">
+            \overrightarrow{\mathbf{h}}_t = \text{LSTM}(\mathbf{x}_t, \overrightarrow{\mathbf{h}}_{t-1}), \quad \overleftarrow{\mathbf{h}}_t = \text{LSTM}(\mathbf{x}_t, \overleftarrow{\mathbf{h}}_{t+1}) \\
+            \mathbf{h}_t^{\text{Bi}} = [\overrightarrow{\mathbf{h}}_t \,;\, \overleftarrow{\mathbf{h}}_t] \in \mathbb{R}^{2 \cdot D_{\text{hidden}}}
+          </div>
+          <p class="math-desc">💡 同時捕捉「話語開頭的壓抑」與「結尾的語調爆發」。</p>
+        </div>
+
+        <div class="card card-highlight-emerald">
+          <h3>🔬 關鍵消融實驗：LSTM 到底多重要？(Bhanbhro 2025)</h3>
+          <p>嚴格對比移除不同模組後的測試表現：</p>
+          <table class="slide-table">
+            <thead>
+              <tr><th>模型配置</th><th>測試準確率</th><th>性能變動</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><b>完整架構 (CNN + BiLSTM + Attention)</b></td><td><b>98.1%</b></td><td class="badge-win">基準峰值 🏆</td></tr>
+              <tr><td>移除 LSTM 模組（僅保留 CNN）</td><td>95.0%</td><td class="badge-warn">顯著下滑 3.1%</td></tr>
+              <tr><td>將雙向 BiLSTM 改為<b>單向 LSTM</b></td><td>89.0%</td><td class="badge-lose">劇烈衰退 9.1%</td></tr>
+            </tbody>
+          </table>
+          <p class="math-desc" style="margin-top: 8px;">💡 <b>震撼結論</b>：雙向時序上下文是模型從 89% 躍升至 98% 的決定性關鍵！</p>
+        </div>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Bhanbhro et al. (2025) Section 3.4 消融研究; Wiki architectures/crnn-architectures.md</span>
+        <a href="https://doi.org/10.3390/signals6020022" class="cite-badge" target="_blank">Signals 2025</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 8 ==================== -->
+    <section class="slide" data-index="8">
+      <div class="slide-header">
+        <span class="slide-tag">Module 07 · 深度學習里程碑架構 (3)</span>
+        <h2 class="slide-title">聚焦情緒爆發點：Attention 注意力機制的魔力</h2>
+        <p class="slide-subtitle">情緒顯著性（Emotional Salience）：不是每一秒語音都充滿了情緒資訊</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>🎯 為什麼需要注意力機制？</h3>
+          <p>在一段 3～5 秒的語音中，可能包含長達 1～2 秒的中性鋪陳或換氣靜音：</p>
+          <ul>
+            <li><b>傳統平均池化 (Mean-Pooling)</b>：對所有時間步一視同仁，關鍵情緒信號會被大量無關中性幀「稀釋」。</li>
+            <li><b>時序自注意力 (Temporal Attention)</b>：為不同時間步自動計算動態權重 $\alpha_t$，讓神經網路「專注」於音高驟變、破音或嘆氣等情緒爆發片段。</li>
+          </ul>
+          <div class="math-box">
+            e_t = \mathbf{u}^\top \tanh(\mathbf{W}_a \mathbf{h}_t + \mathbf{b}_a) \\
+            \alpha_t = \frac{\exp(e_t)}{\sum_{\tau=1}^T \exp(e_\tau)}, \quad \mathbf{c} = \sum_{t=1}^T \alpha_t \mathbf{h}_t
+          </div>
+        </div>
+
+        <div class="card card-highlight-amber">
+          <h3>🔍 實證解方：解決相近情緒的混淆泥淖</h3>
+          <p>在混淆矩陣分析中，基礎模型最容易在<b>低喚醒度 (Low Arousal)</b> 的情緒間迷失：</p>
+          <ul>
+            <li><b>平靜 (Calm) vs 中立 (Neutral)</b>：兩者頻譜能量均勻、音高低平，極易互相誤判。</li>
+            <li><b>悲傷 (Sad) vs 中立 (Neutral)</b>：Singh et al. (2023) 記錄悲傷有 5.24% 被誤判為中立。</li>
+            <li><b>Attention 的解惑效果</b>：動態權重放大微弱的語尾下沉或顫音，Bhanbhro et al. (2025) 實證使相近情緒分類邊界清晰化，推升整體準確率至 <b>98.1%</b>。</li>
+          </ul>
+          <div class="stat-box">
+            <div class="stat-num" style="color: var(--accent-amber);">90.19% vs 85.56%</div>
+            <div class="stat-label">Singh et al. 引入自注意力前後之跨庫綜合表現提升</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Singh et al. (2023) Section 3.3; Bhanbhro et al. (2025) Section 3.3.2 & Figure 5</span>
+        <a href="https://doi.org/10.3390/ijerph20065140" class="cite-badge" target="_blank">IJERPH 2023</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 9 ==================== -->
+    <section class="slide" data-index="9">
+      <div class="slide-header">
+        <span class="slide-tag">Module 08 · 自監督學習基石 (SSL)</span>
+        <h2 class="slide-title">自監督基石：HuBERT 的遮罩聲學單元預測</h2>
+        <p class="slide-subtitle">沒有文字標籤時，語音如何自我學習？離線 K-means 與 BERT 式遮罩預測</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>🧩 語音自監督的本質困難</h3>
+          <p>在 NLP 中有預先定義的詞彙庫（Word Tokens），但在純語音中：</p>
+          <ul>
+            <li>語音是連續時變信號，沒有天然邊界。</li>
+            <li>聲音單元長度可變，無法直接做類別預測。</li>
+            <li><b>HuBERT 解法 (Hsu et al., 2021)</b>：利用<b>離線 K-means 分群</b>把連續特徵轉換成離散「偽音素標籤（Hidden Units）」，再以 Transformer 進行遮罩預測！</li>
+          </ul>
+          <div class="math-box">
+            \mathcal{L}_m = \sum_{t \in M} \log p_f(z_t \mid \tilde{X}, t), \quad z_t \in [1, C]
+          </div>
+        </div>
+
+        <div class="card card-highlight-emerald">
+          <h3>🚀 迭代分群精煉：從 MFCC 到語意特徵</h3>
+          <p>HuBERT 最震撼的發現是「自我進化」能力：</p>
+          <ul>
+            <li><b>Iteration 1</b>：在 39 維 MFCC 上執行 K-means ($C=100$)，音素正規化互資訊 <b>PNMI 僅 0.253</b>。</li>
+            <li><b>Iteration 2</b>：拿第一代 Transformer 第 6 層隱藏特徵重新分群 ($C=500$)，<b>PNMI 暴增至 0.686</b>！</li>
+            <li><b>消融實驗 (Table V)</b>：僅在遮蔽區域計算損失（$\alpha=1.0$）模型表現最佳；若包含非遮蔽區域，WER 嚴重惡化。</li>
+          </ul>
+          <div class="stat-box">
+            <div class="stat-num" style="color: var(--accent-emerald);">PNMI: 0.253 ➔ 0.686</div>
+            <div class="stat-label">從粗糙聲學分群到精純語音結構的躍升</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 15px;">
+        <p style="font-size: 0.9rem; color: #cbd5e1;">
+          <b>💎 與 SER 的深度連結</b>：HuBERT 在 Libri-Light 60k 小時預訓練後，其高層 Transformer 表徵已深深刻劃了人類發音與情緒共振特性，成為後續無數情感運算研究不可或缺的「特徵教師」。
+        </p>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Hsu et al. (2021) Section II, Table IV & V; IEEE/ACM TASLP 2021</span>
+        <a href="https://arxiv.org/abs/2106.07447" class="cite-badge" target="_blank">arXiv:2106.07447</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 10 ==================== -->
+    <section class="slide" data-index="10">
+      <div class="slide-header">
+        <span class="slide-tag">Module 09 · 邊緣運算與知識蒸餾</span>
+        <h2 class="slide-title">極致輕量化：LiSER 跨模態知識蒸餾 (105K 參數)</h2>
+        <p class="slide-subtitle">龐大基底模型無法上手機？利用未標註野生影音，把多模態情緒知識蒸餾到羽量級模型</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>📱 邊緣端部署的殘酷現實</h3>
+          <p>HuBERT (95M~1B 參數) 雖強，但無法部署在低功耗手機與手環：</p>
+          <ul>
+            <li>收集帶標籤的情緒影音成本極端高昂。</li>
+            <li><b>LiSER 創新解法 (Pendyala et al., 2025)</b>：
+              <ul>
+                <li><b>語音教師</b>：HuBERT-Base (95M 參數, LoRA 微調)</li>
+                <li><b>視訊教師</b>：S2D ViT (動態臉部表情模型)</li>
+                <li><b>學生模型</b>：僅 <b>105K 參數</b>的輕量化 2D CNN-LSTM（不到 HuBERT 的千分之一！）</li>
+              </ul>
+            </li>
+          </ul>
+        </div>
+
+        <div class="card card-highlight-cyan">
+          <h3>🌐 未標註野生影音 (MSP-Face) 雙模態蒸餾</h3>
+          <p>利用 YouTube 下載的 46.55 小時未標註對話影片進行 MAE 蒸餾：</p>
+          <div class="math-box">
+            \mathcal{L}_{\text{conf}} = \frac{\sum \mathcal{L}^{\text{sup}} + \sum (\lambda^{\text{sd}} w^{\text{sd}} \mathcal{L}_{\text{MAE}}^{\text{sd}} + \lambda^{\text{vd}} w^{\text{vd}} \mathcal{L}_{\text{MAE}}^{\text{vd}})}{N_l + N_u}
+          </div>
+          <table class="slide-table" style="margin-top: 8px;">
+            <thead>
+              <tr><th>蒸餾配置 (RAVDESS 嚴格 5-Fold)</th><th>UAR</th><th>提升幅度</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>無蒸餾 (僅標籤監督基準)</td><td>0.517</td><td>-</td></tr>
+              <tr><td>單模態語音蒸餾 (僅 HuBERT)</td><td>0.545</td><td>+5.42%</td></tr>
+              <tr><td><b>信賴度雙模態蒸餾 (LiSER 完整版)</b></td><td><b>0.595</b></td><td class="badge-win"><b>+15.09% 🚀</b></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 15px;">
+        <p style="font-size: 0.9rem; color: #cbd5e1;">
+          <b>💡 標籤效率倍增奇蹟</b>：在 CREMA-D 上，<b>僅使用 50% 標籤資料</b>配合無標籤影音蒸餾的 LiSER，表現超越了使用 100% 標籤資料卻無蒸餾的基準模型！
+        </p>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Pendyala et al. (2025) Section 2.3, Table 1 & Table 2</span>
+        <a href="https://arxiv.org/abs/2507.00055" class="cite-badge" target="_blank">arXiv:2507.00055</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 11 ==================== -->
+    <section class="slide" data-index="11">
+      <div class="slide-header">
+        <span class="slide-tag">Module 10 · 語音大型語言模型時代</span>
+        <h2 class="slide-title">通用共情對話：Qwen2-Audio 與 Speech LLM 時代</h2>
+        <p class="slide-subtitle">從封閉式類別分類器，邁向具備端到端語音對話與共情推理的 Audio-LLM</p>
+      </div>
+
+      <div class="grid-2">
+        <div class="card card-highlight">
+          <h3>🤖 生成式大模型架構 (Qwen2-Audio, 8.2B)</h3>
+          <p>擺脫傳統孤立的 Softmax 8 分類，將音訊理解全面整合入語言模型：</p>
+          <ul>
+            <li><b>音訊編碼前段</b>：Whisper-large-v3 (128-Mel 頻譜圖)，透過 Stride 2 池化使每幀表徵約 40ms。</li>
+            <li><b>語言模型底座</b>：Qwen-7B 自回歸 Transformer 解碼器。</li>
+            <li><b>天然提示詞 Prompt</b>：淘汰複雜標籤，直接以自然語言互動（如 <i>"What is the mood of the speaker?"</i>）。</li>
+            <li><b>DPO 人類偏好對齊</b>：增強回答的真實性與情感安慰共情度。</li>
+          </ul>
+        </div>
+
+        <div class="card card-highlight-emerald">
+          <h3>📈 情緒理解與共情基準評測 (Chu et al., 2024)</h3>
+          <p>在自然對話與日常複雜環境下的評估表現：</p>
+          <table class="slide-table">
+            <thead>
+              <tr><th>評測基準</th><th>對比模型與成績</th><th>Qwen2-Audio 表現</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>MELD 多方對話情緒</b></td>
+                <td>WavLM-large: 54.2%<br/>Qwen-Audio: 55.7%</td>
+                <td><b>55.3%</b> (零樣本 Prompt 評測，超越專用模型)</td>
+              </tr>
+              <tr>
+                <td><b>AIR-Bench 語音共情</b><br/>(GPT-4 評分 0~10)</td>
+                <td>Gemini-1.5-pro: 6.97<br/>SALMONN: 6.16</td>
+                <td><b>7.18 分</b> (奪得開源與閉源 SOTA 🏆)</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="math-desc" style="margin-top: 8px;">💡 <b>實務案例</b>：能從考生焦慮語調中辨識出壓力並給予心理安撫；在夾雜裝修雜音與下雨聲的音訊中精準捕捉發話者意圖。</p>
+        </div>
+      </div>
+
+      <div class="citation-bar">
+        <span>出處依據：Chu et al. (2024) Qwen2-Audio Technical Report Section 2, Table 2 & Figure 4</span>
+        <a href="https://arxiv.org/abs/2407.10759" class="cite-badge" target="_blank">arXiv:2407.10759</a>
+      </div>
+    </section>
+
+    <!-- ==================== SLIDE 12 ==================== -->
+    <section class="slide" data-index="12">
+      <div class="slide-header">
+        <span class="slide-tag">Module 11 · 全景回顧與未來展望</span>
+        <h2 class="slide-title">全景回顧與未來展望：SER 技術樹與核心權衡</h2>
+        <p class="slide-subtitle">總結技術演進軌跡，建立評估真實 SER 系統時的工程直覺</p>
+      </div>
+
+      <table class="slide-table" style="margin-bottom: 18px;">
+        <thead>
+          <tr>
+            <th>演進階段</th>
+            <th>代表模型 / 文獻</th>
+            <th>參數量級</th>
+            <th>特徵輸入型態</th>
+            <th>最核心優勢與適用場景</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>1. 混合深度架構</b></td>
+            <td>Bhanbhro (2025) / Singh (2023)</td>
+            <td>數百萬 (M)</td>
+            <td>Log-Mel / MFCC</td>
+            <td>訓練高效、結構透明，適合封閉環境特定情緒分析。</td>
+          </tr>
+          <tr>
+            <td><b>2. 自監督基底 (SSL)</b></td>
+            <td>HuBERT (Hsu et al., 2021)</td>
+            <td>95M ~ 1B</td>
+            <td>原始連續波形 (16 kHz)</td>
+            <td>免標籤海量預訓練，為下游 SER 任務提供頂級特徵萃取。</td>
+          </tr>
+          <tr>
+            <td><b>3. 跨模態蒸餾</b></td>
+            <td>LiSER (Pendyala et al., 2025)</td>
+            <td><b>僅 105K</b></td>
+            <td>Log-Mel 頻譜圖</td>
+            <td>極致輕量、無標籤影音增強，適合手機與穿戴邊緣終端。</td>
+          </tr>
+          <tr>
+            <td><b>4. 語音大型語言模型</b></td>
+            <td>Qwen2-Audio (Chu et al., 2024)</td>
+            <td><b>8.2B</b></td>
+            <td>Whisper 128-Mel + Prompt</td>
+            <td>開放式多輪共情對話、免微調自然語言推理，適合智慧助理。</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="grid-3">
+        <div class="card card-highlight">
+          <h3>1. 算力 vs 邊緣部署</h3>
+          <p>從 105K 到 8.2B，工程師需依據硬體資源（本機離線 vs 雲端伺服器）權衡模型大小與即時推斷延遲。</p>
+        </div>
+
+        <div class="card card-highlight-amber">
+          <h3>2. 評測協議的真實性</h3>
+          <p>切忌被 98% 帳面準確率蒙蔽！永遠優先檢視<b>跨說話者留一法 (LOSO)</b> 與 <b>UAR 指標</b>，防止音色過擬合。</p>
+        </div>
+
+        <div class="card card-highlight-emerald">
+          <h3>3. 邁向真實自發情緒</h3>
+          <p>從早期演員表演型語料（RAVDESS），演進至真實自然多方對話（MELD / MSP-Face），是 SER 落地的終極考驗。</p>
+        </div>
+      </div>
+
+      <div class="citation-bar">
+        <span>恭喜完成本課程！知識庫與原始論文筆記詳見 SER LLM Wiki</span>
+        <a href="../index.md" class="cite-badge">回到 Wiki 知識庫首頁</a>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation & Controls -->
+  <footer>
+    <div>
+      <span>切換操作：點擊上方按鈕，或使用鍵盤 <span class="kbd-hint">←</span> <span class="kbd-hint">→</span> <span class="kbd-hint">Space</span> 換頁 · 按 <span class="kbd-hint">F</span> 全螢幕</span>
+    </div>
+    <div class="dots-container" id="dots-container"></div>
+  </footer>
+
+  <script>
+    const slides = document.querySelectorAll('.slide');
+    const totalSlides = slides.length;
+    let currentSlide = 1;
+
+    const btnPrev = document.getElementById('btn-prev');
+    const btnNext = document.getElementById('btn-next');
+    const slideIndicator = document.getElementById('slide-indicator');
+    const progressBar = document.getElementById('progress-bar');
+    const dotsContainer = document.getElementById('dots-container');
+
+    // Initialize Navigation Dots
+    for (let i = 1; i <= totalSlides; i++) {
+      const dot = document.createElement('div');
+      dot.classList.add('dot');
+      if (i === 1) dot.classList.add('active');
+      dot.title = `跳轉至第 ${i} 頁`;
+      dot.addEventListener('click', () => goToSlide(i));
+      dotsContainer.appendChild(dot);
+    }
+
+    const dots = document.querySelectorAll('.dot');
+
+    function updateView() {
+      slides.forEach((s, idx) => {
+        if (idx + 1 === currentSlide) {
+          s.classList.add('active');
+        } else {
+          s.classList.remove('active');
+        }
+      });
+
+      dots.forEach((d, idx) => {
+        if (idx + 1 === currentSlide) {
+          d.classList.add('active');
+        } else {
+          d.classList.remove('active');
+        }
+      });
+
+      slideIndicator.textContent = `${currentSlide} / ${totalSlides}`;
+      progressBar.style.width = `${(currentSlide / totalSlides) * 100}%`;
+
+      btnPrev.disabled = currentSlide === 1;
+      btnNext.disabled = currentSlide === totalSlides;
+
+      // Scroll viewport to top on page change
+      document.getElementById('slide-viewport').scrollTop = 0;
+    }
+
+    function nextSlide() {
+      if (currentSlide < totalSlides) {
+        currentSlide++;
+        updateView();
+      }
+    }
+
+    function prevSlide() {
+      if (currentSlide > 1) {
+        currentSlide--;
+        updateView();
+      }
+    }
+
+    function goToSlide(n) {
+      if (n >= 1 && n <= totalSlides) {
+        currentSlide = n;
+        updateView();
+      }
+    }
+
+    // Keyboard Navigation
+    document.addEventListener('keydown', (e) => {
+      // Support ArrowRight, Space (key, code, Space), PageDown, n, N
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.code === 'Space' || e.key === 'Space' || e.key === 'PageDown' || e.key === 'n' || e.key === 'N') {
+        nextSlide();
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp' || e.key === 'p' || e.key === 'P') {
+        prevSlide();
+      } else if (e.key === 'Home') {
+        goToSlide(1);
+      } else if (e.key === 'End') {
+        goToSlide(totalSlides);
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFullScreen();
+      }
+    });
+
+    function toggleFullScreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+          console.warn(`Fullscreen error: ${err.message}`);
+        });
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        }
+      }
+    }
+
+    // Initialize
+    updateView();
+  </script>
+</body>
+</html>
